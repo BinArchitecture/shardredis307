@@ -61,9 +61,9 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 //int addZkmonitor(void);
-void crnodeifnexitst(zhandle_t* zkhandle, sds path, int flag, const sds value);
-int addzkc(sds ip);
-char* getLocalIp();
+static void crnodeifnexitst(zhandle_t* zkhandle, sds path, int flag, const sds value);
+static int addzkc(sds ip);
+static char* getLocalIp();
 
 /* Our shared "common" objects */
 struct sharedObjectsStruct shared;
@@ -3800,7 +3800,7 @@ int main(int argc, char **argv) {
 	return 0;
 }
 
-int addzkc(sds ip) {
+static int addzkc(sds ip) {
 	if(server.cluster_enabled)
 		return 0;
 	const char* host = server.zkServeraddr;
@@ -3851,7 +3851,7 @@ int addzkc(sds ip) {
 	return 1;
 }
 
-void crnodeifnexitst(zhandle_t* zkhandle, sds path, int flag, const sds value) {
+static void crnodeifnexitst(zhandle_t* zkhandle, sds path, int flag, const sds value) {
 	int ret = 0;
 	ret = zoo_exists(zkhandle, path, 0, NULL);
 	if (ret==-4) {
@@ -3869,7 +3869,7 @@ void crnodeifnexitst(zhandle_t* zkhandle, sds path, int flag, const sds value) {
 	}
 }
 
-char* getLocalIp()
+static char* getLocalIp()
 {
 	char hname[128];
 	    struct hostent *hent;
