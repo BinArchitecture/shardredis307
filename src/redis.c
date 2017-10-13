@@ -60,11 +60,10 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-//int addZkmonitor(void);
 static void crnodeifnexitst(zhandle_t* zkhandle, sds path, int flag, const sds value);
 static int addzkc(sds ip);
 static char* getLocalIp();
-
+static void redisFork(int cpuNum);
 /* Our shared "common" objects */
 struct sharedObjectsStruct shared;
 
@@ -1846,11 +1845,6 @@ void initServer(void) {
 			server.maxclients + REDIS_EVENTLOOP_FDSET_INCR);
 	server.db = zmalloc(sizeof(redisDb) * server.dbnum);
 
-	/* Open the TCP listening socket for the user commands. */
-	if (server.port != 0&&
-	listenToPort(server.port,server.ipfd,&server.ipfd_count) == REDIS_ERR)
-		exit(1);
-
 	/* Open the listening Unix domain socket. */
 	if (server.unixsocket != NULL) {
 		unlink(server.unixsocket); /* don't care if this fails */
@@ -1861,12 +1855,6 @@ void initServer(void) {
 			exit(1);
 		}
 		anetNonBlock(NULL, server.sofd);
-	}
-
-	/* Abort if there are no listening sockets at all. */
-	if (server.ipfd_count == 0 && server.sofd < 0) {
-		redisLog(REDIS_WARNING, "Configured to not listen anywhere, exiting.");
-		exit(1);
 	}
 
 	/* Create the Redis databases, and initialize other internal state. */
@@ -1913,14 +1901,6 @@ void initServer(void) {
 		exit(1);
 	}
 
-	/* Create an event handler for accepting new connections in TCP and Unix
-	 * domain sockets. */
-	for (j = 0; j < server.ipfd_count; j++) {
-		if (aeCreateFileEvent(server.el, server.ipfd[j], AE_READABLE,
-				acceptTcpHandler, NULL) == AE_ERR) {
-			redisPanic("Unrecoverable error creating server.ipfd file event.");
-		}
-	}
 	if (server.sofd > 0&& aeCreateFileEvent(server.el,server.sofd,AE_READABLE,
 			acceptUnixHandler,NULL) == AE_ERR)
 		redisPanic("Unrecoverable error creating server.sofd file event.");
@@ -3776,10 +3756,6 @@ int main(int argc, char **argv) {
 				exit(1);
 			}
 		}
-		if (server.ipfd_count > 0)
-			redisLog(REDIS_NOTICE,
-					"The server is now ready to accept connections on port %d",
-					server.port);
 		if (server.sofd > 0)
 			redisLog(REDIS_NOTICE,
 					"The server is now ready to accept connections at %s",
@@ -3794,9 +3770,7 @@ int main(int argc, char **argv) {
 				"WARNING: You specified a maxmemory value that is less than 1MB (current value is %llu bytes). Are you sure this is what you really want?",
 				server.maxmemory);
 	}
-	aeSetBeforeSleepProc(server.el, beforeSleep);
-	aeMain(server.el);
-	aeDeleteEventLoop(server.el);
+	redisFork(2);
 	return 0;
 }
 
@@ -3877,5 +3851,76 @@ static char* getLocalIp()
 	    hent = gethostbyname(hname);
 	    //printf("hostname: %s/naddress list: ", hent->h_name);
 	    return inet_ntoa(*(struct in_addr*)(hent->h_addr_list[0]));
+}
+
+static int forkNum;
+static void redisFork(int cpuNum){
+		if(fork()!=0){
+			if(++forkNum<cpuNum){
+				redisFork(cpuNum);
+			}
+			else{
+				/* Open the TCP listening socket for the user commands. */
+					if (server.port != 0&&
+					listenToPort(server.port,server.ipfd,&server.ipfd_count) == REDIS_ERR)
+						exit(1);
+					/* Abort if there are no listening sockets at all. */
+					if (server.ipfd_count == 0 && server.sofd < 0) {
+						redisLog(REDIS_WARNING, "Configured to not listen anywhere, exiting.");
+						exit(1);
+					}
+					/* Create an event handler for accepting new connections in TCP and Unix
+					 * domain sockets. */
+					int j;
+					for (j = 0; j < server.ipfd_count; j++) {
+						if (aeCreateFileEvent(server.el, server.ipfd[j], AE_READABLE,
+								acceptTcpHandler, NULL) == AE_ERR) {
+							redisPanic("Unrecoverable error creating server.ipfd file event.");
+						}
+					}
+					if (server.ipfd_count > 0)
+						redisLog(REDIS_NOTICE,
+								"The server is now ready to accept connections on port %d",
+								server.port);
+					aeSetBeforeSleepProc(server.el, beforeSleep);
+					aeMain(server.el);
+					aeDeleteEventLoop(server.el);
+			}
+		}
+		else{
+			if(forkNum==cpuNum){
+				exit(0);
+			}
+			/* Open the TCP listening socket for the user commands. */
+			int port=server.port+forkNum+1;
+			redisLog(REDIS_NOTICE,
+					"create::PID = %d, Parent PID = %d,port=%d\n",getpid(), getppid(),port);
+			int ipfd[REDIS_BINDADDR_MAX]; /* TCP socket file descriptors */
+			int ipfd_count=0;
+			if ( port!= 0&&
+				listenToPort(port,ipfd,&ipfd_count) == REDIS_ERR)
+					exit(1);
+				/* Abort if there are no listening sockets at all. */
+				if (ipfd_count == 0) {
+					redisLog(REDIS_WARNING, "Configured to not listen anywhere, exiting.");
+					exit(1);
+				}
+				/* Create an event handler for accepting new connections in TCP and Unix
+				 * domain sockets. */
+				int j;
+				for (j = 0; j < ipfd_count; j++) {
+					if (aeCreateFileEvent(server.el, ipfd[j], AE_READABLE,
+							acceptTcpHandler, NULL) == AE_ERR) {
+						redisPanic("Unrecoverable error creating server.ipfd file event.");
+					}
+				}
+				if (ipfd_count > 0)
+					redisLog(REDIS_NOTICE,
+							"The server is now ready to accept connections on port %d",
+							port);
+				aeSetBeforeSleepProc(server.el, beforeSleep);
+				aeMain(server.el);
+				aeDeleteEventLoop(server.el);
+		}
 }
 /* The End */
