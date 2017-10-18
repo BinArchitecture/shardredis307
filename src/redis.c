@@ -54,7 +54,7 @@
 #include <sys/utsname.h>
 #include <locale.h>
 #include <stdio.h>
-
+#include <sched.h>
 #include <unistd.h>
 #include <netdb.h>
 #include <sys/socket.h>
@@ -63,7 +63,8 @@
 static void crnodeifnexitst(zhandle_t* zkhandle, sds path, int flag, const sds value);
 static int addzkc(sds ip);
 static char* getLocalIp();
-static void redisFork(int cpuNum);
+//static void redisFork(int cpuNum);
+void* doListen(int port);
 /* Our shared "common" objects */
 struct sharedObjectsStruct shared;
 
@@ -991,12 +992,12 @@ int clientsCronResizeQueryBuffer(redisClient *c) {
 }
 
 #define CLIENTS_CRON_MIN_ITERATIONS 5
-void clientsCron(void) {
+void clientsCron(list *clients) {
 	/* Make sure to process at least numclients/server.hz of clients
 	 * per call. Since this function is called server.hz times per second
 	 * we are sure that in the worst case we process all the clients in 1
 	 * second. */
-	int numclients = listLength(server.clients);
+	int numclients = listLength(clients);
 	int iterations = numclients / server.hz;
 	mstime_t now = mstime();
 
@@ -1008,15 +1009,15 @@ void clientsCron(void) {
 				(numclients < CLIENTS_CRON_MIN_ITERATIONS) ?
 						numclients : CLIENTS_CRON_MIN_ITERATIONS;
 
-	while (listLength(server.clients) && iterations--) {
+	while (listLength(clients) && iterations--) {
 		redisClient *c;
 		listNode *head;
 
 		/* Rotate the list, take the current head, process.
 		 * This way if the client must be removed from the list it's the
 		 * first element and we don't incur into O(N) computation. */
-		listRotate(server.clients);
-		head = listFirst(server.clients);
+		listRotate(clients);
+		head = listFirst(clients);
 		c = listNodeValue(head);
 		/* The following functions do different service checks on the client.
 		 * The protocol is that they return non-zero if the client was
@@ -1176,13 +1177,13 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 		run_with_period(5000) {
 			redisLog(REDIS_VERBOSE,
 					"%lu clients connected (%lu slaves), %zu bytes in use",
-					listLength(server.clients) - listLength(server.slaves),
+					listLength(eventLoop->clients) - listLength(server.slaves),
 					listLength(server.slaves), zmalloc_used_memory());
 		}
 	}
 
 	/* We need to do a few operations on clients asynchronously. */
-	clientsCron();
+	clientsCron(eventLoop->clients);
 
 	/* Handle background operations on Redis databases. */
 	databasesCron();
@@ -1237,9 +1238,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 					&& (server.unixtime - server.lastbgsave_try >
 					REDIS_BGSAVE_RETRY_DELAY
 							|| server.lastbgsave_status == REDIS_OK)) {
-				redisLog(REDIS_NOTICE, "%d changes in %d seconds. Saving...",
-						sp->changes, (int) sp->seconds);
-				rdbSaveBackground(server.rdb_filename);
+//				redisLog(REDIS_NOTICE, "%d changes in %d seconds. Saving...",
+//						sp->changes, (int) sp->seconds);
+//				rdbSaveBackground(server.rdb_filename);
 				break;
 			}
 		}
@@ -2689,7 +2690,7 @@ void bytesToHuman(char *s, unsigned long long n) {
 /* Create the string returned by the INFO command. This is decoupled
  * by the INFO command itself as we need to report the same information
  * on memory corruption problems. */
-sds genRedisInfoString(char *section) {
+sds genRedisInfoString(char *section,list *clients) {
 	sds info = sdsempty();
 	time_t uptime = server.unixtime - server.stat_starttime;
 	int j, numcommands;
@@ -2770,7 +2771,7 @@ sds genRedisInfoString(char *section) {
 				"client_longest_output_list:%lu\r\n"
 				"client_biggest_input_buf:%lu\r\n"
 				"blocked_clients:%d\r\n",
-		listLength(server.clients) - listLength(server.slaves), lol, bib,
+		listLength(clients) - listLength(server.slaves), lol, bib,
 				server.bpop_blocked_clients);
 	}
 
@@ -3108,7 +3109,7 @@ void infoCommand(redisClient *c) {
 		addReply(c, shared.syntaxerr);
 		return;
 	}
-	sds info = genRedisInfoString(section);
+	sds info = genRedisInfoString(section,c->el->clients);
 	addReplySds(c,
 			sdscatprintf(sdsempty(), "$%lu\r\n", (unsigned long) sdslen(info)));
 	addReplySds(c, info);
@@ -3770,8 +3771,53 @@ int main(int argc, char **argv) {
 				"WARNING: You specified a maxmemory value that is less than 1MB (current value is %llu bytes). Are you sure this is what you really want?",
 				server.maxmemory);
 	}
-	redisFork(2);
-	return 0;
+//	redisFork(2);
+	 int ret=0;
+	 pthread_t id1,id2,id3;
+	 int k;
+	 for(k=0;k<3;){
+		ret=pthread_create(&id1,NULL,(void*)doListen,server.port+(k++));
+		if(ret)
+		{
+				printf("create pthread error!\n");
+				 return -1;
+		}
+	 }
+	    /* Open the TCP listening socket for the user commands. */
+//		if (server.port != 0&&
+//		listenToPort(server.port,server.ipfd,&server.ipfd_count) == REDIS_ERR)
+//			exit(1);
+//		/* Abort if there are no listening sockets at all. */
+//		if (server.ipfd_count == 0 && server.sofd < 0) {
+//			redisLog(REDIS_WARNING, "Configured to not listen anywhere, exiting.");
+//			exit(1);
+//		}
+//		/* Create an event handler for accepting new connections in TCP and Unix
+//		 * domain sockets. */
+//		int j;
+//		for (j = 0; j < server.ipfd_count; j++) {
+//			if (aeCreateFileEvent(server.el, server.ipfd[j], AE_READABLE,
+//					acceptTcpHandler, NULL) == AE_ERR) {
+//				redisPanic("Unrecoverable error creating server.ipfd file event.");
+//			}
+//		}
+//		if (server.ipfd_count > 0)
+//			redisLog(REDIS_NOTICE,
+//					"The server is now ready to accept connections on port %d",
+//					server.port);
+//		aeSetBeforeSleepProc(server.el, beforeSleep);
+//		aeMain(server.el);
+//		aeDeleteEventLoop(server.el);
+	    cpu_set_t mask;
+	    CPU_ZERO(&mask);
+	    	CPU_SET(1, &mask);
+	    	if (pthread_setaffinity_np(pthread_self(), sizeof(mask),
+	    			&mask) < 0) {
+	    			perror("pthread_setaffinity_np");
+	    	}
+	    while(1){
+	    		sleep(10);
+	    }
 }
 
 static int addzkc(sds ip) {
@@ -3853,74 +3899,117 @@ static char* getLocalIp()
 	    return inet_ntoa(*(struct in_addr*)(hent->h_addr_list[0]));
 }
 
-static int forkNum;
-static void redisFork(int cpuNum){
-		if(fork()!=0){
-			if(++forkNum<cpuNum){
-				redisFork(cpuNum);
-			}
-			else{
-				/* Open the TCP listening socket for the user commands. */
-					if (server.port != 0&&
-					listenToPort(server.port,server.ipfd,&server.ipfd_count) == REDIS_ERR)
-						exit(1);
-					/* Abort if there are no listening sockets at all. */
-					if (server.ipfd_count == 0 && server.sofd < 0) {
-						redisLog(REDIS_WARNING, "Configured to not listen anywhere, exiting.");
-						exit(1);
-					}
-					/* Create an event handler for accepting new connections in TCP and Unix
-					 * domain sockets. */
-					int j;
-					for (j = 0; j < server.ipfd_count; j++) {
-						if (aeCreateFileEvent(server.el, server.ipfd[j], AE_READABLE,
-								acceptTcpHandler, NULL) == AE_ERR) {
-							redisPanic("Unrecoverable error creating server.ipfd file event.");
-						}
-					}
-					if (server.ipfd_count > 0)
-						redisLog(REDIS_NOTICE,
-								"The server is now ready to accept connections on port %d",
-								server.port);
-					aeSetBeforeSleepProc(server.el, beforeSleep);
-					aeMain(server.el);
-					aeDeleteEventLoop(server.el);
-			}
+void* doListen(int port){
+	cpu_set_t mask;
+    CPU_ZERO(&mask);
+	CPU_SET(port%4, &mask);
+	if (pthread_setaffinity_np(pthread_self(), sizeof(mask),
+			&mask) < 0) {
+			perror("pthread_setaffinity_np");
+	}
+	redisLog(REDIS_NOTICE,
+					"The server is now affine to cpu%d",
+					port%4);
+	/* Open the TCP listening socket for the user commands. */
+	int ipfd[REDIS_BINDADDR_MAX]; /* TCP socket file descriptors */
+	int ipfd_count=0;
+	aeEventLoop *el = aeCreateEventLoop(
+				server.maxclients + REDIS_EVENTLOOP_FDSET_INCR);
+	el->clients = listCreate();
+	if (port != 0&&
+	listenToPort(port,ipfd,&ipfd_count) == REDIS_ERR)
+		exit(1);
+	/* Abort if there are no listening sockets at all. */
+	if (ipfd_count == 0 && server.sofd < 0) {
+		redisLog(REDIS_WARNING, "Configured to not listen anywhere, exiting.");
+		exit(1);
+	}
+	/* Create an event handler for accepting new connections in TCP and Unix
+	 * domain sockets. */
+	int j;
+	for (j = 0; j < ipfd_count; j++) {
+		if (aeCreateFileEvent(el, ipfd[j], AE_READABLE,
+				acceptTcpHandler, NULL) == AE_ERR) {
+			redisPanic("Unrecoverable error creating server.ipfd file event.");
 		}
-		else{
-			if(forkNum==cpuNum){
-				exit(0);
-			}
-			/* Open the TCP listening socket for the user commands. */
-			int port=server.port+forkNum+1;
-			redisLog(REDIS_NOTICE,
-					"create::PID = %d, Parent PID = %d,port=%d\n",getpid(), getppid(),port);
-			int ipfd[REDIS_BINDADDR_MAX]; /* TCP socket file descriptors */
-			int ipfd_count=0;
-			if ( port!= 0&&
-				listenToPort(port,ipfd,&ipfd_count) == REDIS_ERR)
-					exit(1);
-				/* Abort if there are no listening sockets at all. */
-				if (ipfd_count == 0) {
-					redisLog(REDIS_WARNING, "Configured to not listen anywhere, exiting.");
-					exit(1);
-				}
-				/* Create an event handler for accepting new connections in TCP and Unix
-				 * domain sockets. */
-				int j;
-				for (j = 0; j < ipfd_count; j++) {
-					if (aeCreateFileEvent(server.el, ipfd[j], AE_READABLE,
-							acceptTcpHandler, NULL) == AE_ERR) {
-						redisPanic("Unrecoverable error creating server.ipfd file event.");
-					}
-				}
-				if (ipfd_count > 0)
-					redisLog(REDIS_NOTICE,
-							"The server is now ready to accept connections on port %d",
-							port);
-				aeSetBeforeSleepProc(server.el, beforeSleep);
-				aeMain(server.el);
-				aeDeleteEventLoop(server.el);
-		}
+	}
+	if (ipfd_count > 0)
+		redisLog(REDIS_NOTICE,
+				"The server is now ready to accept connections on port %d",
+				port);
+	aeSetBeforeSleepProc(el, beforeSleep);
+	aeMain(el);
+	aeDeleteEventLoop(el);
 }
+
+//static int forkNum;
+//static void redisFork(int cpuNum){
+//		if(fork()!=0){
+//			if(++forkNum<cpuNum){
+//				redisFork(cpuNum);
+//			}
+//			else{
+//				/* Open the TCP listening socket for the user commands. */
+//					if (server.port != 0&&
+//					listenToPort(server.port,server.ipfd,&server.ipfd_count) == REDIS_ERR)
+//						exit(1);
+//					/* Abort if there are no listening sockets at all. */
+//					if (server.ipfd_count == 0 && server.sofd < 0) {
+//						redisLog(REDIS_WARNING, "Configured to not listen anywhere, exiting.");
+//						exit(1);
+//					}
+//					/* Create an event handler for accepting new connections in TCP and Unix
+//					 * domain sockets. */
+//					int j;
+//					for (j = 0; j < server.ipfd_count; j++) {
+//						if (aeCreateFileEvent(server.el, server.ipfd[j], AE_READABLE,
+//								acceptTcpHandler, NULL) == AE_ERR) {
+//							redisPanic("Unrecoverable error creating server.ipfd file event.");
+//						}
+//					}
+//					if (server.ipfd_count > 0)
+//						redisLog(REDIS_NOTICE,
+//								"The server is now ready to accept connections on port %d",
+//								server.port);
+//					aeSetBeforeSleepProc(server.el, beforeSleep);
+//					aeMain(server.el);
+//					aeDeleteEventLoop(server.el);
+//			}
+//		}
+//		else{
+//			if(forkNum==cpuNum){
+//				exit(0);
+//			}
+//			/* Open the TCP listening socket for the user commands. */
+//			int port=server.port+forkNum+1;
+//			redisLog(REDIS_NOTICE,
+//					"create::PID = %d, Parent PID = %d,port=%d\n",getpid(), getppid(),port);
+//			int ipfd[REDIS_BINDADDR_MAX]; /* TCP socket file descriptors */
+//			int ipfd_count=0;
+//			if ( port!= 0&&
+//				listenToPort(port,ipfd,&ipfd_count) == REDIS_ERR)
+//					exit(1);
+//				/* Abort if there are no listening sockets at all. */
+//				if (ipfd_count == 0) {
+//					redisLog(REDIS_WARNING, "Configured to not listen anywhere, exiting.");
+//					exit(1);
+//				}
+//				/* Create an event handler for accepting new connections in TCP and Unix
+//				 * domain sockets. */
+//				int j;
+//				for (j = 0; j < ipfd_count; j++) {
+//					if (aeCreateFileEvent(server.el, ipfd[j], AE_READABLE,
+//							acceptTcpHandler, NULL) == AE_ERR) {
+//						redisPanic("Unrecoverable error creating server.ipfd file event.");
+//					}
+//				}
+//				if (ipfd_count > 0)
+//					redisLog(REDIS_NOTICE,
+//							"The server is now ready to accept connections on port %d",
+//							port);
+//				aeSetBeforeSleepProc(server.el, beforeSleep);
+//				aeMain(server.el);
+//				aeDeleteEventLoop(server.el);
+//		}
+//}
 /* The End */

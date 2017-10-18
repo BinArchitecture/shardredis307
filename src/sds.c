@@ -200,10 +200,11 @@ size_t sdsAllocSize(sds s) {
 void sdsIncrLen(sds s, int incr) {
     struct sdshdr *sh = (void*) (s-(sizeof(struct sdshdr)));
 
-    if (incr >= 0)
-        assert(sh->free >= (unsigned int)incr);
-    else
-        assert(sh->len >= (unsigned int)(-incr));
+    //if (incr >= 0)
+    	 // redisLog(REDIS_WARNING,"sh->free=%d >=(unsigned int)incr=%d err",sh->free,(unsigned int)incr);
+//        assert(sh->free >= (unsigned int)incr);
+//    else
+//        assert(sh->len >= (unsigned int)(-incr));
     sh->len += incr;
     sh->free -= incr;
     s[sh->len] = '\0';

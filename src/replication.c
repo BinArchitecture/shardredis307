@@ -1116,7 +1116,7 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
         /* Final setup of the connected slave <- master link */
         zfree(server.repl_transfer_tmpfile);
         close(server.repl_transfer_fd);
-        server.master = createClient(server.repl_transfer_s);
+        server.master = createClient(server.el,server.repl_transfer_s);
         server.master->flags |= REDIS_MASTER;
         server.master->authenticated = 1;
         server.repl_state = REDIS_REPL_CONNECTED;
@@ -1849,9 +1849,9 @@ void replicationCacheMaster(redisClient *c) {
 
     /* Remove from the list of clients, we don't want this client to be
      * listed by CLIENT LIST or processed in any way by batch operations. */
-    ln = listSearchKey(server.clients,c);
+    ln = listSearchKey(c->el->clients,c);
     redisAssert(ln != NULL);
-    listDelNode(server.clients,ln);
+    listDelNode(c->el->clients,ln);
 
     /* Save the master. Server.master will be set to null later by
      * replicationHandleMasterDisconnection(). */
@@ -1859,8 +1859,8 @@ void replicationCacheMaster(redisClient *c) {
 
     /* Remove the event handlers and close the socket. We'll later reuse
      * the socket of the new connection with the master during PSYNC. */
-    aeDeleteFileEvent(server.el,c->fd,AE_READABLE);
-    aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
+    aeDeleteFileEvent(c->el,c->fd,AE_READABLE);
+    aeDeleteFileEvent(c->el,c->fd,AE_WRITABLE);
     close(c->fd);
 
     /* Set fd to -1 so that we can safely call freeClient(c) later. */

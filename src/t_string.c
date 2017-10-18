@@ -323,7 +323,7 @@ void msetnxCommand(redisClient *c) {
 }
 
 void incrDecrCommand(redisClient *c, long long incr) {
-    long long value, oldvalue;
+	long long value, oldvalue;
     robj *o, *new;
 
     o = lookupKeyWrite(c->db,c->argv[1]);
@@ -336,27 +336,62 @@ void incrDecrCommand(redisClient *c, long long incr) {
         addReplyError(c,"increment or decrement would overflow");
         return;
     }
-    value += incr;
 
     if (o && o->refcount == 1 && o->encoding == REDIS_ENCODING_INT &&
         (value < 0 || value >= REDIS_SHARED_INTEGERS) &&
         value >= LONG_MIN && value <= LONG_MAX)
     {
         new = o;
-        o->ptr = (void*)((long)value);
+        REDIS_NOTUSED(value);
+		__sync_fetch_and_add(&(o->ptr),incr);
+//        for(;;){
+//        	if(__sync_bool_compare_and_swap((int64_t *)&(o->ptr),((int64_t)oldvalue),((int64_t)value))){
+//        			break;
+//        	  }
+//        	o = lookupKeyWrite(c->db,c->argv[1]);
+//        	if (getLongLongFromObjectOrReply(c,o,&value,NULL) != REDIS_OK) return;
+//        	oldvalue = value;
+//        	value += incr;
+//        }
+//        o->ptr = (void*)((long)value);
     } else {
-        new = createStringObjectFromLongLong(value);
         if (o) {
-            dbOverwrite(c->db,c->argv[1],new);
+        		new = o;
+        		REDIS_NOTUSED(value);
+        		__sync_fetch_and_add(&(o->ptr),incr);
+//            dbOverwrite(c->db,c->argv[1],new);
         } else {
-            dbAdd(c->db,c->argv[1],new);
+        		//concurrently create obj
+        		char *key=c->argv[1]->ptr;
+        		sem_t *mutex=sem_open(key,O_CREAT|O_RDWR, 0644, 1);
+        		if (mutex == SEM_FAILED)
+			{
+        			redisLog(REDIS_ERR,"sem_open failed! (%s)\n", strerror(errno));
+			}
+			sem_wait(mutex);
+			o = lookupKeyWrite(c->db,c->argv[1]);
+			if (o) {
+				sem_post(mutex);
+				sem_close(mutex);
+				sem_unlink(key);
+			}
+			else{
+				value += incr;
+				new = createStringObjectFromLongLong(value);
+				dbAdd(c->db,c->argv[1],new);
+				sem_post(mutex);
+				sem_close(mutex);
+				sem_unlink(key);
+			}
         }
     }
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(REDIS_NOTIFY_STRING,"incrby",c->argv[1],c->db->id);
     server.dirty++;
     addReply(c,shared.colon);
-    addReply(c,new);
+    if(new){
+    		addReply(c,new);
+    }
     addReply(c,shared.crlf);
 }
 

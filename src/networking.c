@@ -62,7 +62,7 @@ int listMatchObjects(void *a, void *b) {
     return equalStringObjects(a,b);
 }
 
-redisClient *createClient(int fd) {
+redisClient *createClient(aeEventLoop *el,int fd) {
     redisClient *c = zmalloc(sizeof(redisClient));
 
     /* passing -1 as fd it is possible to create a non connected client.
@@ -74,7 +74,7 @@ redisClient *createClient(int fd) {
         anetEnableTcpNoDelay(NULL,fd);
         if (server.tcpkeepalive)
             anetKeepAlive(NULL,fd,server.tcpkeepalive);
-        if (aeCreateFileEvent(server.el,fd,AE_READABLE,
+        if (aeCreateFileEvent(el,fd,AE_READABLE,
             readQueryFromClient, c) == AE_ERR)
         {
             close(fd);
@@ -84,6 +84,7 @@ redisClient *createClient(int fd) {
     }
 
     selectDb(c,0);
+    c->el=el;
     c->id = server.next_client_id++;
     c->fd = fd;
     c->name = NULL;
@@ -125,7 +126,7 @@ redisClient *createClient(int fd) {
     c->peerid = NULL;
     listSetFreeMethod(c->pubsub_patterns,decrRefCountVoid);
     listSetMatchMethod(c->pubsub_patterns,listMatchObjects);
-    if (fd != -1) listAddNodeTail(server.clients,c);
+    if (fd != -1) listAddNodeTail(el->clients,c);
     initClientMultiState(c);
     return c;
 }
@@ -171,7 +172,7 @@ int prepareClientToWrite(redisClient *c) {
          (c->replstate == REDIS_REPL_ONLINE && !c->repl_put_online_on_ack)))
     {
         /* Try to install the write handler. */
-        if (aeCreateFileEvent(server.el, c->fd, AE_WRITABLE,
+        if (aeCreateFileEvent(c->el, c->fd, AE_WRITABLE,
                 sendReplyToClient, c) == AE_ERR)
         {
             freeClientAsync(c);
@@ -583,9 +584,9 @@ void copyClientOutputBuffer(redisClient *dst, redisClient *src) {
 }
 
 #define MAX_ACCEPTS_PER_CALL 1000
-static void acceptCommonHandler(int fd, int flags) {
+static void acceptCommonHandler(aeEventLoop *el,int fd, int flags) {
     redisClient *c;
-    if ((c = createClient(fd)) == NULL) {
+    if ((c = createClient(el,fd)) == NULL) {
         redisLog(REDIS_WARNING,
             "Error registering fd event for the new client: %s (fd=%d)",
             strerror(errno),fd);
@@ -596,7 +597,7 @@ static void acceptCommonHandler(int fd, int flags) {
      * connection. Note that we create the client instead to check before
      * for this condition, since now the socket is already set in non-blocking
      * mode and we can send an error for free using the Kernel I/O */
-    if (listLength(server.clients) > server.maxclients) {
+    if (listLength(el->clients) > server.maxclients) {
         char *err = "-ERR max number of clients reached\r\n";
 
         /* That's a best effort error message, don't check write errors */
@@ -627,7 +628,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         redisLog(REDIS_VERBOSE,"Accepted %s:%d", cip, cport);
-        acceptCommonHandler(cfd,0);
+        acceptCommonHandler(el,cfd,0);
     }
 }
 
@@ -646,7 +647,7 @@ void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         redisLog(REDIS_VERBOSE,"Accepted connection to %s", server.unixsocket);
-        acceptCommonHandler(cfd,REDIS_UNIX_SOCKET);
+        acceptCommonHandler(el,cfd,REDIS_UNIX_SOCKET);
     }
 }
 
@@ -718,8 +719,8 @@ void freeClient(redisClient *c) {
     /* Close socket, unregister events, and remove list of replies and
      * accumulated arguments. */
     if (c->fd != -1) {
-        aeDeleteFileEvent(server.el,c->fd,AE_READABLE);
-        aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
+        aeDeleteFileEvent(c->el,c->fd,AE_READABLE);
+        aeDeleteFileEvent(c->el,c->fd,AE_WRITABLE);
         close(c->fd);
     }
     listRelease(c->reply);
@@ -727,9 +728,9 @@ void freeClient(redisClient *c) {
 
     /* Remove from the list of clients */
     if (c->fd != -1) {
-        ln = listSearchKey(server.clients,c);
+        ln = listSearchKey(c->el->clients,c);
         redisAssert(ln != NULL);
-        listDelNode(server.clients,ln);
+        listDelNode(c->el->clients,ln);
     }
 
     /* When client was just unblocked because of a blocking operation,
@@ -877,7 +878,7 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
     if (c->bufpos == 0 && listLength(c->reply) == 0) {
         c->sentlen = 0;
-        aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
+        aeDeleteFileEvent(el,c->fd,AE_WRITABLE);
 
         /* Close connection after entire reply has been sent. */
         if (c->flags & REDIS_CLOSE_AFTER_REPLY) freeClient(c);

@@ -47,7 +47,8 @@
 #include <netinet/in.h>
 #include <lua.h>
 #include <signal.h>
-
+#include <semaphore.h>
+#include <fcntl.h>
 typedef long long mstime_t; /* millisecond time type. */
 
 #include "ae.h"      /* Event driven programming library */
@@ -579,6 +580,7 @@ typedef struct redisClient {
     /* Response buffer */
     int bufpos;
     char buf[REDIS_REPLY_CHUNK_BYTES];
+    aeEventLoop *el;
 } redisClient;
 
 struct saveparam {
@@ -1045,7 +1047,7 @@ size_t redisPopcount(void *s, long count);
 void redisSetProcTitle(char *title);
 
 /* networking.c -- Networking and Client related operations */
-redisClient *createClient(int fd);
+redisClient *createClient(aeEventLoop *el,int fd);
 void closeTimedoutClients(void);
 void freeClient(redisClient *c);
 void freeClientAsync(redisClient *c);
@@ -1588,7 +1590,7 @@ void _redisPanic(char *msg, char *file, int line);
 void bugReportStart(void);
 void redisLogObjectDebugInfo(robj *o);
 void sigsegvHandler(int sig, siginfo_t *info, void *secret);
-sds genRedisInfoString(char *section);
+sds genRedisInfoString(char *section,list *clients);
 void enableWatchdog(int period);
 void disableWatchdog(void);
 void watchdogScheduleSignal(int period);

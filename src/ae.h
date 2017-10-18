@@ -50,6 +50,7 @@
 /* Macros */
 #define AE_NOTUSED(V) ((void) V)
 
+#include "adlist.h"
 struct aeEventLoop;
 
 /* Types and data structures */
@@ -95,6 +96,7 @@ typedef struct aeEventLoop {
     int stop;
     void *apidata; /* This is used for polling API specific data */
     aeBeforeSleepProc *beforesleep;
+    list *clients;
 } aeEventLoop;
 
 /* Prototypes */
