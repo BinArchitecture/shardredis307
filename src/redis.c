@@ -1746,12 +1746,12 @@ int listenToPort(int port, int *fds, int *count) {
 		if (server.bindaddr[j] == NULL) {
 			/* Bind * for both IPv6 and IPv4, we enter here only if
 			 * server.bindaddr_count == 0. */
-			fds[*count] = anetTcp6Server(server.neterr, port, NULL,
-					server.tcp_backlog);
-			if (fds[*count] != ANET_ERR) {
-				anetNonBlock(NULL, fds[*count]);
-				(*count)++;
-			}
+//			fds[*count] = anetTcp6Server(server.neterr, port, NULL,
+//					server.tcp_backlog);
+//			if (fds[*count] != ANET_ERR) {
+//				anetNonBlock(NULL, fds[*count]);
+//				(*count)++;
+//			}
 			fds[*count] = anetTcpServer(server.neterr, port, NULL,
 					server.tcp_backlog);
 			if (fds[*count] != ANET_ERR) {
@@ -1765,8 +1765,8 @@ int listenToPort(int port, int *fds, int *count) {
 				break;
 		} else if (strchr(server.bindaddr[j], ':')) {
 			/* Bind IPv6 address. */
-			fds[*count] = anetTcp6Server(server.neterr, port,
-					server.bindaddr[j], server.tcp_backlog);
+//			fds[*count] = anetTcp6Server(server.neterr, port,
+//					server.bindaddr[j], server.tcp_backlog);
 		} else {
 			/* Bind IPv4 address. */
 			fds[*count] = anetTcpServer(server.neterr, port, server.bindaddr[j],
@@ -3773,10 +3773,11 @@ int main(int argc, char **argv) {
 	}
 //	redisFork(2);
 	 int ret=0;
-	 pthread_t id1,id2,id3;
+	 int ssa=3;
+	 pthread_t id[ssa];
 	 int k;
-	 for(k=0;k<3;){
-		ret=pthread_create(&id1,NULL,(void*)doListen,server.port+(k++));
+	 for(k=0;k<ssa;){
+		ret=pthread_create(&id[k],NULL,(void*)doListen,server.port+(k++));
 		if(ret)
 		{
 				printf("create pthread error!\n");
@@ -3808,13 +3809,6 @@ int main(int argc, char **argv) {
 //		aeSetBeforeSleepProc(server.el, beforeSleep);
 //		aeMain(server.el);
 //		aeDeleteEventLoop(server.el);
-	    cpu_set_t mask;
-	    CPU_ZERO(&mask);
-	    	CPU_SET(1, &mask);
-	    	if (pthread_setaffinity_np(pthread_self(), sizeof(mask),
-	    			&mask) < 0) {
-	    			perror("pthread_setaffinity_np");
-	    	}
 	    while(1){
 	    		sleep(10);
 	    }
@@ -3899,25 +3893,26 @@ static char* getLocalIp()
 	    return inet_ntoa(*(struct in_addr*)(hent->h_addr_list[0]));
 }
 
-void* doListen(int port){
+void* doListen(int k){
 	cpu_set_t mask;
     CPU_ZERO(&mask);
-	CPU_SET(port%4, &mask);
+    int coreNum=get_nprocs();
+	CPU_SET(k%coreNum, &mask);
 	if (pthread_setaffinity_np(pthread_self(), sizeof(mask),
 			&mask) < 0) {
 			perror("pthread_setaffinity_np");
 	}
 	redisLog(REDIS_NOTICE,
-					"The server is now affine to cpu%d",
-					port%4);
+					"Thread is now affine to cpu%d",
+					k%coreNum);
 	/* Open the TCP listening socket for the user commands. */
 	int ipfd[REDIS_BINDADDR_MAX]; /* TCP socket file descriptors */
 	int ipfd_count=0;
 	aeEventLoop *el = aeCreateEventLoop(
 				server.maxclients + REDIS_EVENTLOOP_FDSET_INCR);
 	el->clients = listCreate();
-	if (port != 0&&
-	listenToPort(port,ipfd,&ipfd_count) == REDIS_ERR)
+	if (server.port != 0&&
+	listenToPort(server.port,ipfd,&ipfd_count) == REDIS_ERR)
 		exit(1);
 	/* Abort if there are no listening sockets at all. */
 	if (ipfd_count == 0 && server.sofd < 0) {
@@ -3934,9 +3929,9 @@ void* doListen(int port){
 		}
 	}
 	if (ipfd_count > 0)
-		redisLog(REDIS_NOTICE,
-				"The server is now ready to accept connections on port %d",
-				port);
+			redisLog(REDIS_NOTICE,
+					"The thread is now ready to accept connections on port %d",
+					server.port);
 	aeSetBeforeSleepProc(el, beforeSleep);
 	aeMain(el);
 	aeDeleteEventLoop(el);

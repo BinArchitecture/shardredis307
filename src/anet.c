@@ -45,7 +45,6 @@
 #include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
-
 #include "anet.h"
 
 static void anetSetError(char *err, const char *fmt, ...)
@@ -241,6 +240,15 @@ static int anetSetReuseAddr(char *err, int fd) {
      * will be able to close/open sockets a zillion of times */
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
         anetSetError(err, "setsockopt SO_REUSEADDR: %s", strerror(errno));
+        return ANET_ERR;
+    }
+    return ANET_OK;
+}
+
+static int anetSetReusePort(char *err, int fd) {
+	int reuse0=1;
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, (char *)&reuse0, sizeof(reuse0)) == -1) {
+        anetSetError(err, "setsockopt SO_REUSEPORT: %s", strerror(errno));
         return ANET_ERR;
     }
     return ANET_OK;
@@ -462,38 +470,53 @@ static int anetV6Only(char *err, int s) {
 
 static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backlog)
 {
-    int s, rv;
-    char _port[6];  /* strlen("65535") */
-    struct addrinfo hints, *servinfo, *p;
+    int s;//, rv;
+//    char _port[6];  /* strlen("65535") */
+//    struct addrinfo hints, *servinfo, *p;
+//
+//    snprintf(_port,6,"%d",port);
+//    memset(&hints,0,sizeof(hints));
+//    hints.ai_family = af;
+//    hints.ai_socktype = SOCK_STREAM;
+//    hints.ai_flags = AI_PASSIVE;    /* No effect if bindaddr != NULL */
 
-    snprintf(_port,6,"%d",port);
-    memset(&hints,0,sizeof(hints));
-    hints.ai_family = af;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE;    /* No effect if bindaddr != NULL */
+//    if ((rv = getaddrinfo(bindaddr,_port,&hints,&servinfo)) != 0) {
+//        anetSetError(err, "%s", gai_strerror(rv));
+//        return ANET_ERR;
+//    }
 
-    if ((rv = getaddrinfo(bindaddr,_port,&hints,&servinfo)) != 0) {
-        anetSetError(err, "%s", gai_strerror(rv));
-        return ANET_ERR;
-    }
-    for (p = servinfo; p != NULL; p = p->ai_next) {
-        if ((s = socket(p->ai_family,p->ai_socktype,p->ai_protocol)) == -1)
-            continue;
-
-        if (af == AF_INET6 && anetV6Only(err,s) == ANET_ERR) goto error;
-        if (anetSetReuseAddr(err,s) == ANET_ERR) goto error;
-        if (anetListen(err,s,p->ai_addr,p->ai_addrlen,backlog) == ANET_ERR) goto error;
-        goto end;
-    }
-    if (p == NULL) {
-        anetSetError(err, "unable to bind socket");
-        goto error;
-    }
+    struct sockaddr_in in;
+    memset(&in,'\0',sizeof(in));
+    in.sin_family=AF_INET;
+    in.sin_port=htons(port);
+    in.sin_addr.s_addr=htons(INADDR_ANY); // inet_addr("172.16.40.101");
+    if ((s = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+    	goto error;
+    if (anetSetReusePort(err,s) == ANET_ERR)
+    	goto error;
+    if (bind(s, (struct sockaddr*)&in, sizeof(struct sockaddr)) == -1)
+    	goto error;
+    if (listen(s, backlog)==-1)
+    	goto error;
+    goto end;
+//    for (p = servinfo; p != NULL; p = p->ai_next) {
+//        if ((s = socket(p->ai_family,p->ai_socktype,p->ai_protocol)) == -1)
+//            continue;
+//
+//        if (af == AF_INET6 && anetV6Only(err,s) == ANET_ERR) goto error;
+//        if (anetSetReuseAddr(err,s) == ANET_ERR) goto error;
+//        if (anetListen(err,s,p->ai_addr,p->ai_addrlen,backlog) == ANET_ERR) goto error;
+//        goto end;
+//    }
+//    if (p == NULL) {
+//        anetSetError(err, "unable to bind socket");
+//        goto error;
+//    }
 
 error:
     s = ANET_ERR;
 end:
-    freeaddrinfo(servinfo);
+//    freeaddrinfo(servinfo);
     return s;
 }
 
