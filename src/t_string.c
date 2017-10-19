@@ -371,6 +371,9 @@ void incrDecrCommand(redisClient *c, long long incr) {
 			sem_wait(mutex);
 			o = lookupKeyWrite(c->db,c->argv[1]);
 			if (o) {
+				new = o;
+				REDIS_NOTUSED(value);
+				__sync_fetch_and_add(&(o->ptr),incr);
 				sem_post(mutex);
 				sem_close(mutex);
 				sem_unlink(key);
